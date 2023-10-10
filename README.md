@@ -45,6 +45,6 @@ Go to Google Developers Console.
 
 <h2>Step 6: View the Generated HTML Page</h2>
 
-- After you've authorized the app, the HTML page will be generated and displayed in your browser.
+- After you've authorized the app, the HTML page will be generated and displayed in your browser at http://localhost:5000/.
 - You will see a summary of the folder structure and revisions of the files in your Google Drive.
 
