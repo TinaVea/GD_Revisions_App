@@ -7,6 +7,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
+from flask import make_response
 
 SCOPES = ['https://www.googleapis.com/auth/drive']
 app = Flask(__name__)
@@ -31,19 +32,45 @@ def download_revision(file_id, revision_id):
     creds = get_credentials()
     service = build('drive', 'v3', credentials=creds)
     mime_type = request.args.get('mime_type')
-    if mime_type in ['application/vnd.google-apps.document', 'application/vnd.google-apps.spreadsheet', 'application/vnd.google-apps.presentation']:
-        export_request = service.files().export_media(fileId=file_id, mimeType='application/pdf')
-        filename = f'{file_id}_{revision_id}.pdf'
+    
+    # Get the file's metadata to obtain the original file name
+    file_metadata = service.files().get(fileId=file_id).execute()
+    original_filename = file_metadata.get('name', f'{file_id}_{revision_id}')  # Default to file_id_revision_id if name is not available
+    
+    export_mimes = {
+        'application/vnd.google-apps.document': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/vnd.google-apps.spreadsheet': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'application/vnd.google-apps.presentation': 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+    }
+    
+    if mime_type in export_mimes:
+        g_request = service.files().export(fileId=file_id, mimeType=export_mimes[mime_type])
+        extension = '.docx' if mime_type == 'application/vnd.google-apps.document' else '.xlsx'
     else:
-        export_request = service.revisions().get_media(fileId=file_id, revisionId=revision_id)
-        filename = f'{file_id}_{revision_id}.doc'
+        g_request = service.revisions().get_media(fileId=file_id, revisionId=revision_id)
+        extension = ''  # You may need to handle other file types and extensions here
+    
+    # Correctly form the download filename by only appending the correct extension
+    download_filename = f'{original_filename}{extension}'
+    
     fh = io.BytesIO()
-    downloader = MediaIoBaseDownload(fh, export_request)
+    downloader = MediaIoBaseDownload(fh, g_request)
     done = False
     while done is False:
         status, done = downloader.next_chunk()
     fh.seek(0)
-    return send_file(fh, as_attachment=True, download_name=filename)
+    
+    # Determine the MIME type for the response
+    response_mime_type = export_mimes.get(mime_type, 'application/octet-stream')
+    
+    return send_file(
+        fh,
+        mimetype=response_mime_type,
+        as_attachment=True,
+        download_name=download_filename
+    )
+
+
 
 @app.route('/make_xlsx')
 def make_xlsx():
@@ -66,7 +93,6 @@ def generate_html_and_excel(service=None, folder_id='root', folder_name='ROOT', 
     folder_structure += f"<div class='folder'><div class='folder-header' onclick='toggleContent(this)'>📁 {folder_name}</div><div class='folder-content'>"
     results = service.files().list(q=f"'{folder_id}' in parents", pageSize=1000, fields="nextPageToken, files(id, name, mimeType)").execute()
     items = results.get('files', [])
-
     for item in items:
         if item['mimeType'] != 'application/vnd.google-apps.folder':
             counters['files'] += 1
@@ -79,17 +105,15 @@ def generate_html_and_excel(service=None, folder_id='root', folder_name='ROOT', 
             for rev in revisions:
                 counters['revisions'] += 1
                 modified_by = rev['lastModifyingUser']['displayName'] if 'lastModifyingUser' in rev else 'Unknown'
-                root_files += f"<div class='revision'>Revision: {rev['id']} | Timestamp: {rev['modifiedTime']} | Modified by: {modified_by} | <a href='/download_revision/{file_id}/{rev['id']}?mime_type={mime_type}'>Download</a></div>"
+                root_files += f"<div class='revision'>Revision: {rev['id']} | Timestamp: {rev['modifiedTime']} | Modified by: {modified_by} | <a href='/download_revision/{file_id}/{rev['id']}?mime_type={mime_type}' target='_blank'>Download</a></div>"
                 data.append([folder_name, file_name, mime_type, filetype, rev['id'], rev['modifiedTime'], modified_by, f"{path}/{file_name}"])
             root_files += "</div>"
     folder_structure += root_files
-
     for item in items:
         if item['mimeType'] == 'application/vnd.google-apps.folder':
             sub_folder_structure, sub_data, _ = generate_html_and_excel(service, item['id'], item['name'], f"{path}/{item['name']}", counters)
             folder_structure += sub_folder_structure
             data.extend(sub_data)
-
     folder_structure += "</div></div>"
     return folder_structure, data, counters
 
@@ -138,7 +162,8 @@ def index():
                 border-radius: 4px;
                 margin: 10px;
                 padding: 10px;
-                background-color: #fff;
+                background-color:
+                #fff;
                 box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             }}
             .folder-content, .file-content {{
